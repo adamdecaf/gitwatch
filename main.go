@@ -7,18 +7,28 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 )
 
 const Version = "0.1.0-dev"
 
 var (
-	flagStorageDir = flag.String("storage", ".storage/", "Local filesystem storage path, used for caching")
+	flagConfigFile   = flag.String("config", "", "config file, newline delimited of git repos")
+	flagPollInterval = flag.Duration("interval", time.Hour, "how often to refresh git repos")
+	flagStorageDir   = flag.String("storage", ".storage/", "Local filesystem storage path, used for caching")
+
+	defaultRepository = newRepo("https://github.com/adamdecaf/gitwatch.git")
+
+	mu    = sync.RWMutex{} // guards repos, lastUpdatedAt
+	repos []*repo
 )
 
 func main() {
@@ -29,15 +39,63 @@ func main() {
 		return
 	}
 
-	// TODO(adam): flag or config file, something..
-	repos := []string{
-		"https://github.com/adamdecaf/cert-manage.git",
-		"https://github.com/golang/go.git",
+	mu.Lock()
+	repos = collectRepos(*flagConfigFile)
+	mu.Unlock()
+	go func(repos []*repo, pollInterval time.Duration) {
+		for {
+			watchRepos()
+			time.Sleep(pollInterval)
+		}
+	}(repos, *flagPollInterval)
+
+	log.Fatal(http.ListenAndServe(":6060", handler{}))
+}
+
+type handler struct{}
+
+func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	mu.RLock()
+	defer mu.RUnlock()
+
+	for i := range repos {
+		var commits []*commit
+		for _, v := range repos[i].recentCommits {
+			commits = append(commits, v...)
+		}
+		fmt.Fprintf(w, "%s: %d new commits\n", repos[i].localpath, len(commits))
+	}
+}
+
+func collectRepos(where string) []*repo {
+	f, err := os.Open(where)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []*repo{
+				defaultRepository,
+			}
+		}
+		log.Printf("error reading %s, err=%v", where, err)
+		return nil
 	}
 
+	// split file based on newlines
+	var repos []*repo
+	r := bufio.NewScanner(f)
+	for r.Scan() {
+		line := strings.TrimSpace(r.Text())
+		if err := r.Err(); err != nil {
+			break // return on io.EOF or any error
+		}
+		repos = append(repos, newRepo(line))
+	}
+	return repos
+}
+
+func watchRepos() {
 	// clone or update local repos
 	for i := range repos {
-		repo := newRepo(repos[i])
+		repo := repos[i]
 		oldHead, err := repo.ensure() // fetch or clone
 		if err != nil {
 			log.Printf("error updating %s, err=%v", repo.localpath, err)
@@ -49,13 +107,32 @@ func main() {
 			continue
 		}
 
+		if oldHead == "" {
+			continue
+		}
+
 		if oldHead != curHead { // found changes
 			commits, err := repo.log(oldHead, curHead)
 			if err != nil {
 				log.Printf("error getting log of %s from %s to %s, err=%v", repo.localpath, oldHead, curHead, err)
 				continue
 			}
-			fmt.Println(len(commits))
+			mu.Lock()
+			prev := time.Now().Add(-24 * time.Hour).Format("2006-01-02")
+			curr := time.Now().Format("2006-01-02")
+			v, exists := repos[i].recentCommits[curr]
+			if exists {
+				repos[i].recentCommits[curr] = append(v, commits...)
+			} else {
+				repos[i].recentCommits[curr] = commits
+			}
+			// remove commits not under today or yesterday
+			for k, _ := range repos[i].recentCommits {
+				if k != prev && k != curr {
+					delete(repos[i].recentCommits, k)
+				}
+			}
+			mu.Unlock()
 		}
 	}
 }
@@ -77,6 +154,9 @@ type repo struct {
 
 	// remote name, defaults to origin
 	remote string
+
+	// timestamp -> commits
+	recentCommits map[string][]*commit
 }
 
 func newRepo(repoUrl string) *repo {
@@ -85,6 +165,7 @@ func newRepo(repoUrl string) *repo {
 	if repo.remote == "" {
 		repo.remote = "origin"
 	}
+	repo.recentCommits = make(map[string][]*commit, 0)
 	return repo
 }
 
