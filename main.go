@@ -1,109 +1,92 @@
 package main
 
 import (
+	"flag"
 	"fmt"
-	"strings"
+	"log"
+	"net/url"
 	"os"
-
-	"gopkg.in/src-d/go-billy.v4/memfs"
-	"gopkg.in/src-d/go-git.v4"
-	"gopkg.in/src-d/go-git.v4/config"
-	"gopkg.in/src-d/go-git.v4/plumbing"
-	"gopkg.in/src-d/go-git.v4/storage/memory"
+	"os/exec"
+	"path"
+	"path/filepath"
+	"strings"
 )
 
 const Version = "0.1.0-dev"
 
+var (
+	flagStorageDir = flag.String("storage", ".storage/", "Local filesystem storage path, used for caching")
+)
+
 func main() {
-	fmt.Printf("gitwatch %s\n", Version)
+	flag.Parse()
 
-	// TODO(adam): Use a real fs, for caching
-	fs := memfs.New()
-	storer := memory.NewStorage()
-
-	repo, err := git.Clone(storer, fs, &git.CloneOptions{
-		URL: "https://github.com/adamdecaf/cert-manage.git",
-		// RemoteName:   "master", // origin?
-		SingleBranch:      true,
-		// Depth:             100,
-		RecurseSubmodules: git.NoRecurseSubmodules,
-		Tags:              git.NoTags,
-	})
-	if err != nil {
-		panic(err)
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		fmt.Println(Version)
+		return
 	}
+
+	// TODO(adam): flag or config file, something..
+	repos := []string{
+		"https://github.com/adamdecaf/cert-manage.git",
+	}
+
+	// clone or update local repos
+	for i := range repos {
+		repo := parseRepoName(repos[i])
+		storagePath := path.Join(*flagStorageDir, repo.localpath)
+
+		if dirExists(storagePath) {
+			cmd := exec.Command("git", "fetch", "origin")
+			cmd.Dir = storagePath
+			if err := cmd.Run(); err != nil {
+				log.Fatal(err) // TODO(adam)
+			}
+			log.Printf("git fetch on %s", repo.localpath)
+		} else {
+			cmd := exec.Command("git", "clone", "--depth=1", repos[i])
+			cmd.Dir = filepath.Dir(storagePath) // TODO(adam): probably need to go one level higher
+			if err := os.MkdirAll(cmd.Dir, 0755); err != nil {
+				log.Fatal(err)
+			}
+			if err := cmd.Run(); err != nil {
+				log.Fatal(err) // TODO(adam)
+			}
+			log.Printf("git clone on %s", repo.localpath)
+		}
+
+	}
+
+	// check if dir exists, clone --depth otherwise
+	// if dir exists, git fetch $remote
 
 	// This works instead, `main.go` can be any path
 	// $ git log --oneline 9bf483aa848fdfb2b625b6b84fedce6d46b32d68...6abb583cc70fc0e6aa83115aa81f63700979f398 -- main.go
 	// 6abb583 cmd/version: on -dev builds add git hash and Go runtime version to output
+}
 
-	// just two commits from cert-manage
-	// cmd/version: on -dev builds add git hash and Go runtime version to output
-	src := "6abb583cc70fc0e6aa83115aa81f63700979f398" // newer
-	// Merge pull request #153 from adamdecaf/ui-remove-sha1
-	dst := "3007985f34ecebaf5a5dda30911586acab0364dc" // older
+func dirExists(path string) bool {
+	s, err := os.Stat(path)
+	return err == nil && s.IsDir()
+}
 
-	_ = config.RefSpec(fmt.Sprintf("%s:%s", dst, src))
+type repo struct {
+	// e.g. github.com
+	host string
 
-	// TODO(adam): This sees the refs as up to date and won't grab older commits
-	err = repo.Fetch(&git.FetchOptions{
-		RemoteName: "origin",
-		// RefSpecs: []config.RefSpec{
-		// 	config.RefSpec("refs/heads/master:refs/remotes/master"),
-		// 	// format: <src>:<dst>
-		// config.RefSpec(fmt.Sprintf("%s:%s", dst, src)),
-		// },
-		Progress: os.Stdout,
-		Depth: 100, // doesn't work, but .Depth on clone does...
-		// Tags: git.NoTags,
-		Force: true,
-	})
-	// err = repo.Fetch(&git.FetchOptions{
-	// 	Depth: 100,
-	// 	Force: true,
-	// })
-	fmt.Printf("fetch = %v\n", err)
-	if err != nil && err != git.NoErrAlreadyUpToDate {
-		panic(err)
-	}
+	// e.g. github.com/adamdecaf/cert-manage
+	localpath string
+}
 
-	_ = plumbing.NewHash(src)
-	// ref := plumbing.NewHashReference(plumbing.HEAD, plumbing.NewHash(src))
-	// commit, err := repo.CommitObject(ref.Hash())
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// fmt.Println(commit)
-
-	// Walk along commits, print each commit sumamry
-	commits, err := repo.Log(&git.LogOptions{
-		From: plumbing.NewHash("d83526b151a5cb3abd271e874a507ec169f201f3"), // docs: mention 'add' sub-command
-		// From: plumbing.NewHash(src),
-	})
+func parseRepoName(repoUrl string) *repo {
+	// assume they're URI's, which is probably good enough
+	// TODO(adam): I assume git@github.com:adamdecaf/repo.git urls fail?
+	u, err := url.Parse(repoUrl)
 	if err != nil {
-		panic(err)
+		return nil
 	}
-	defer commits.Close()
-
-	for {
-		commit, err := commits.Next()
-		if commit == nil {
-			break
-		}
-		if err != nil {
-			panic(err)
-		}
-		if commit.Hash.String() == dst {
-			break
-		}
-
-		// print first line
-		idx := strings.Index(commit.Message, "\n")
-		if idx > 0 {
-			fmt.Println(commit.Message[:idx])
-			continue
-		}
-		fmt.Println(commit.Message)
+	return &repo{
+		host:      u.Host,
+		localpath: path.Join(u.Host, strings.TrimSuffix(u.Path, ".git")),
 	}
-
 }
