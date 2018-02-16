@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/url"
 	"os"
@@ -29,40 +32,32 @@ func main() {
 	// TODO(adam): flag or config file, something..
 	repos := []string{
 		"https://github.com/adamdecaf/cert-manage.git",
+		"https://github.com/golang/go.git",
 	}
 
 	// clone or update local repos
 	for i := range repos {
-		repo := parseRepoName(repos[i])
-		storagePath := path.Join(*flagStorageDir, repo.localpath)
-
-		if dirExists(storagePath) {
-			cmd := exec.Command("git", "fetch", "origin")
-			cmd.Dir = storagePath
-			if err := cmd.Run(); err != nil {
-				log.Fatal(err) // TODO(adam)
-			}
-			log.Printf("git fetch on %s", repo.localpath)
-		} else {
-			cmd := exec.Command("git", "clone", "--depth=1", repos[i])
-			cmd.Dir = filepath.Dir(storagePath) // TODO(adam): probably need to go one level higher
-			if err := os.MkdirAll(cmd.Dir, 0755); err != nil {
-				log.Fatal(err)
-			}
-			if err := cmd.Run(); err != nil {
-				log.Fatal(err) // TODO(adam)
-			}
-			log.Printf("git clone on %s", repo.localpath)
+		repo := newRepo(repos[i])
+		oldHead, err := repo.ensure() // fetch or clone
+		if err != nil {
+			log.Printf("error updating %s, err=%v", repo.localpath, err)
+			continue
+		}
+		curHead, err := repo.head()
+		if err != nil {
+			log.Printf("error getting current head of %s, err=%v", repo.localpath, err)
+			continue
 		}
 
+		if curHead != oldHead { // found changes
+			commits, err := repo.log(oldHead, curHead)
+			if err != nil {
+				log.Printf("error getting log of %s from %s to %s, err=%v", repo.localpath, oldHead, curHead, err)
+				continue
+			}
+			fmt.Println(len(commits))
+		}
 	}
-
-	// check if dir exists, clone --depth otherwise
-	// if dir exists, git fetch $remote
-
-	// This works instead, `main.go` can be any path
-	// $ git log --oneline 9bf483aa848fdfb2b625b6b84fedce6d46b32d68...6abb583cc70fc0e6aa83115aa81f63700979f398 -- main.go
-	// 6abb583 cmd/version: on -dev builds add git hash and Go runtime version to output
 }
 
 func dirExists(path string) bool {
@@ -71,11 +66,26 @@ func dirExists(path string) bool {
 }
 
 type repo struct {
+	// original url
+	repoUrl string
+
 	// e.g. github.com
 	host string
 
 	// e.g. github.com/adamdecaf/cert-manage
 	localpath string
+
+	// remote name, defaults to origin
+	remote string
+}
+
+func newRepo(repoUrl string) *repo {
+	repo := parseRepoName(repoUrl)
+	repo.repoUrl = repoUrl
+	if repo.remote == "" {
+		repo.remote = "origin"
+	}
+	return repo
 }
 
 func parseRepoName(repoUrl string) *repo {
@@ -89,4 +99,87 @@ func parseRepoName(repoUrl string) *repo {
 		host:      u.Host,
 		localpath: path.Join(u.Host, strings.TrimSuffix(u.Path, ".git")),
 	}
+}
+
+func (r *repo) storagePath() string {
+	return path.Join(*flagStorageDir, r.localpath)
+}
+
+func (r *repo) head() (string, error) {
+	out, err := exec.Command("git", "rev-parse", "HEAD").CombinedOutput()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func (r *repo) ensure() (prevHead string, err error) {
+	storagePath := r.storagePath()
+
+	// Just fetch updates if we've got a local clone
+	if dirExists(storagePath) {
+		head, err := r.head()
+		if err != nil {
+			return "", err
+		}
+		cmd := exec.Command("git", "fetch", r.remote)
+		cmd.Dir = storagePath
+		if err := cmd.Run(); err != nil {
+			return "", err
+		}
+		log.Printf("git fetch on %s", r.localpath)
+		return head, nil
+	}
+
+	// Clone fresh copy locally
+	cmd := exec.Command("git", "clone", "--depth=1", r.repoUrl)
+	cmd.Dir = filepath.Dir(storagePath)
+	if err := os.MkdirAll(cmd.Dir, 0755); err != nil {
+		return "", err
+	}
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+	log.Printf("git clone on %s", r.localpath)
+	return "", nil // fresh clone so no previous HEAD
+}
+
+type commit struct {
+	shortRef string
+	message  string
+}
+
+// $ git log --oneline 9bf483aa848fdfb2b625b6b84fedce6d46b32d68...6abb583cc70fc0e6aa83115aa81f63700979f398 -- main.go
+// 6abb583 cmd/version: on -dev builds add git hash and Go runtime version to output
+func (r *repo) log(old, cur string) ([]*commit, error) {
+	out, err := exec.Command("git", "log", "--oneline", fmt.Sprintf("%s...%s", old, cur)).CombinedOutput() // TODO(adam): -- $dir
+	if err != nil {
+		return nil, err
+	}
+	var commits []*commit
+	rdr := bufio.NewScanner(bytes.NewReader(out))
+	for rdr.Scan() {
+		line := strings.TrimSpace(rdr.Text())
+		if err := rdr.Err(); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, err
+		}
+		if line == "" {
+			continue
+		}
+
+		// split into shortRef and message
+		idx := strings.Index(line, " ")
+		if idx > 0 {
+			shortRef := line[:idx-1]
+			message := line[idx:]
+			commits = append(commits, &commit{
+				shortRef: shortRef,
+				message:  message,
+			})
+		}
+	}
+	return commits, nil
 }
