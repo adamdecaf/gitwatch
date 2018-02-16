@@ -49,7 +49,7 @@ func main() {
 			continue
 		}
 
-		if curHead != oldHead { // found changes
+		if oldHead != curHead { // found changes
 			commits, err := repo.log(oldHead, curHead)
 			if err != nil {
 				log.Printf("error getting log of %s from %s to %s, err=%v", repo.localpath, oldHead, curHead, err)
@@ -106,7 +106,9 @@ func (r *repo) storagePath() string {
 }
 
 func (r *repo) head() (string, error) {
-	out, err := exec.Command("git", "rev-parse", "HEAD").CombinedOutput()
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = r.storagePath()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", err
 	}
