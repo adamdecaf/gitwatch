@@ -1,3 +1,6 @@
+// gitwatch periodically refreshes git repositories to note
+// changes and report those on an http web page or
+// prometheus metrics endpoint
 package main
 
 import (

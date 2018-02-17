@@ -1,6 +1,6 @@
 # gitwatch
 
-watch git repositories and be notified of changes
+watch git repositories and be have changes available over http
 
 ### Install / Usage
 
