@@ -19,7 +19,13 @@ func TestGitwatch__integration(t *testing.T) {
 	os.Remove(".storage/github.com/adamdecaf/gitwatch")
 
 	// build docker image and binary
-	out, err := exec.Command("make", "docker").CombinedOutput()
+	out, err := exec.Command("make", "dist").CombinedOutput()
+	if err != nil {
+		fmt.Printf(`Output:
+%s`, string(out))
+		t.Fatal(err)
+	}
+	out, err = exec.Command("docker", "build", "-t", "gitwatch:it", ".").CombinedOutput()
 	if err != nil {
 		fmt.Printf(`Output:
 %s`, string(out))
@@ -27,7 +33,7 @@ func TestGitwatch__integration(t *testing.T) {
 	}
 
 	// run container
-	container := exec.Command("docker", "run", "-t", fmt.Sprintf("gitwatch:%s", Version), "-interval", "1s")
+	container := exec.Command("docker", "run", "-t", "gitwatch:it", "-interval", "1s")
 
 	var stdout bytes.Buffer
 	container.Stdout = &stdout
