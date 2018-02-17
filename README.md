@@ -4,7 +4,7 @@ watch git repositories and be notified of changes
 
 ### Install / Usage
 
-There's a docker image available: `docker pull adamdecaf/gitwatch`
+There's a docker image available: `docker pull adamdecaf/gitwatch` [Docker Hub](https://hub.docker.com/r/adamdecaf/gitwatch/)
 
 The following flags are supported:
 
