@@ -19,7 +19,7 @@ func TestGitwatch__integration(t *testing.T) {
 	os.Remove(".storage/github.com/adamdecaf/gitwatch")
 
 	// build docker image and binary
-	_, err := exec.Command("make", "build").CombinedOutput()
+	_, err := exec.Command("make", "docker").CombinedOutput()
 	if err != nil {
 		t.Fatal(err)
 	}
