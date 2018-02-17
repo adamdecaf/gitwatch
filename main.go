@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-const Version = "0.1.0"
+const Version = "0.1.1-dev"
 
 var (
 	flagConfigFile   = flag.String("config", "", "config file, newline delimited of git repos")
