@@ -58,6 +58,22 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mu.RLock()
 	defer mu.RUnlock()
 
+	// all output is text/plain
+	w.Header().Set("Content-Type", "text/plain")
+
+	// prometheus metrics
+	if strings.HasPrefix(r.URL.Path, "/metrics") {
+		for i := range repos {
+			var commits []*commit
+			for _, v := range repos[i].recentCommits {
+				commits = append(commits, v...)
+			}
+			fmt.Fprintf(w, "gitwatch_recent_updated{repo=\"%s\"} %d\n", repos[i].localpath, len(commits))
+		}
+		return
+	}
+
+	// more human oriented format
 	for i := range repos {
 		var commits []*commit
 		for _, v := range repos[i].recentCommits {
