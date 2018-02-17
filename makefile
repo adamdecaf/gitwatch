@@ -28,11 +28,3 @@ build: check
 
 docker: dist
 	docker build -t gitwatch:$(VERSION) .
-
-mkrel:
-	gothub release -u adamdecaf -r gitwatch -t $(VERSION) --name $(VERSION) --pre-release
-
-upload:
-	gothub upload -u adamdecaf -r gitwatch -t $(VERSION) --name "gitwatch-linux" --file bin/gitwatch-linux-amd64
-	gothub upload -u adamdecaf -r gitwatch -t $(VERSION) --name "gitwatch-osx" --file bin/gitwatch-osx-amd64
-	gothub upload -u adamdecaf -r gitwatch -t $(VERSION) --name "gitwatch.exe" --file bin/gitwatch-amd64.exe
