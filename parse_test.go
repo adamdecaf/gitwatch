@@ -22,14 +22,3 @@ func TestGitWatch__parseRepoName(t *testing.T) {
 		t.Errorf("got %q", storagePath)
 	}
 }
-
-func TestGitWatch__head(t *testing.T) {
-	repo := parseRepoName("https://github.com/adamdecaf/gitwatch.git")
-	if repo == nil {
-		t.Fatal("expected result")
-	}
-
-	if ref, _ := repo.head(); ref == "" {
-		t.Error("expected commit")
-	}
-}
